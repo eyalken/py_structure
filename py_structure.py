@@ -12,7 +12,8 @@ def get_module_name(root: str, file_path: str) -> str | None:
     relative_path = os.path.relpath(file_path, root)
     if relative_path.startswith(".."):  # safety
         return None
-    return '.'.join(relative_path[:-3].split(os.sep))
+    module= root.split(os.sep)[-1]+"." + ".".join(relative_path[:-3].split(os.sep))
+    return module
 
 def resolve_relative_import(caller_parts: list[str], level: int, module: str | None) -> str:
     if level > len(caller_parts):
@@ -33,17 +34,31 @@ def analyze_imports(root: str, file_path: str) -> list[tuple[str, str]]:
             tree = ast.parse(f.read(), filename=file_path)
     except Exception:
         return result
+
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 result.append((caller_module, alias.name))
+
         elif isinstance(node, ast.ImportFrom):
             if node.level > 0:
                 resolved = resolve_relative_import(caller_parts, node.level, node.module)
                 result.append((caller_module, resolved))
+
             elif node.module:
-                result.append((caller_module, node.module))
+                for alias in node.names:
+                    # Determine the full path of the imported module
+                    full_module_path = os.path.join(root, *node.module.split('.'), f"{alias.name}.py")
+                    full_package_path = os.path.join(root, *node.module.split('.'), alias.name, "__init__.py")
+                    if os.path.isfile(full_module_path) or os.path.isfile(full_package_path):
+                        full_module = f"{node.module}.{alias.name}"
+                    else:
+                        # Possibly importing an attribute or something not resolvable as a file
+                        full_module = node.module
+                    result.append((caller_module, full_module))
     return result
+
+
 
 def collect_modules_and_imports(roots: list[str]) -> tuple[set[str], list[tuple[str, str]], dict[str, str]]:
     modules = set()
@@ -92,9 +107,10 @@ def main():
     parser.add_argument(
         "--mode",
         required=True,
-        choices=["dep", "nodeps", "dependent", "outside_local_dir", "encapsulated_dir"],
+        choices=["dep", "nodeps", "nodeps_verbose", "dependent", "outside_local_dir", "encapsulated_dir"],
         help=(
             "* nodeps: find py files which not depend in any file in root\n"
+            "* nodeps_verbose: same as nodeps but prints table of external deps\n"
             "* dep: find files which depends on files in root\n"
             "* dependent: find files which recursively depended in package\n"
             "* outside_local_dir: find files that import modules outside their own directory and subdirs\n"
@@ -118,6 +134,25 @@ def main():
         print("\nModules with no internal dependencies:")
         for module in sorted(no_deps):
             print(module)
+
+    elif args.mode == "nodeps_verbose":
+        has_deps = {caller for caller, imported in all_imports if imported in all_modules}
+        no_deps = all_modules - has_deps
+
+        print("\nModules with no internal dependencies (external dependencies shown):")
+        print(f"{'MODULE':<60} | {'EXTERNAL IMPORT'}")
+        print("="*90)
+
+        for caller in sorted(no_deps):
+            externals = [imported for c, imported in all_imports if c == caller and imported not in all_modules]
+            if not externals:
+                print(f"{caller:<60} | -")
+            else:
+                for idx, ext in enumerate(externals):
+                    if idx == 0:
+                        print(f"{caller:<60} | {ext}")
+                    else:
+                        print(f"{'':<60} | {ext}")
 
     elif args.mode == "dependent":
         if not args.package:
