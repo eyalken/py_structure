@@ -107,17 +107,18 @@ def main():
     parser.add_argument(
         "--mode",
         required=True,
-        choices=["dep", "nodeps", "nodeps_verbose", "dependent", "outside_local_dir", "encapsulated_dir"],
+        choices=["dep", "nodeps", "nodeps_verbose", "pkg_dep","not_pkg_dep", "outside_local_dir", "encapsulated_dir"],
         help=(
             "* nodeps: find py files which not depend in any file in root\n"
             "* nodeps_verbose: same as nodeps but prints table of external deps\n"
             "* dep: find files which depends on files in root\n"
-            "* dependent: find files which recursively depended in package\n"
+            "* pkg_dep: find files which recursively depended in package\n"
+            "* not_pkg_dep: find files which not depended (even recursively) in package\n"
             "* outside_local_dir: find files that import modules outside their own directory and subdirs\n"
             "* encapsulated_dir: list directories where all Python files depend only on their own dir/subdirs"
         )
     )
-    parser.add_argument("package", nargs="?", help="Package name for 'dependent' mode")
+    parser.add_argument("package", nargs="?", help="Package name for 'pkg_dep' mode")
 
     args = parser.parse_args()
     all_modules, all_imports, module_to_path = collect_modules_and_imports(args.root)
@@ -154,9 +155,9 @@ def main():
                     else:
                         print(f"{'':<60} | {ext}")
 
-    elif args.mode == "dependent":
+    elif args.mode == "pkg_dep":
         if not args.package:
-            print("Error: --mode dependent requires a package name.")
+            print("Error: --mode pkg_dep requires a package name.")
             return
 
         reverse_deps = build_reverse_dep_graph(all_imports)
@@ -176,6 +177,25 @@ def main():
 
         for module in sorted(direct_dependents - set(paths)):
             print(f"{module} (direct)")
+
+    elif args.mode == "not_pkg_dep":
+        if not args.package:
+            print("Error: --mode not_pkg_dep requires a package name.")
+            return
+
+        reverse_deps = build_reverse_dep_graph(all_imports)
+        direct_dependents = {
+            caller for caller, imported in all_imports
+            if imported == args.package or imported.startswith(f"{args.package}.")
+        }
+
+        paths = trace_dependency_paths(reverse_deps, direct_dependents)
+        all_dependent = set(paths) | direct_dependents
+
+        not_dependent = all_modules - all_dependent
+        print(f"\nModules NOT dependent (even recursively) on package '{args.package}':")
+        for module in sorted(not_dependent):
+            print(module)
 
     elif args.mode == "outside_local_dir":
         outside_local = defaultdict(list)
